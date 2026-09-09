@@ -35,13 +35,15 @@
   const ARM = 5.5, PAD = 4;                // cross arm length, mask margin around it
   const IN_MS = 260, OUT_MS = 240;
   const LIFE_MIN = 1600, LIFE_MAX = 3400;
+  const PARALLAX = 0.3;                    // background scrolls at this fraction of the page
   /* --------------------------------------------------------------------- */
 
   const LEVELS = [];
   for (let v = -LEVEL_MAX; v <= LEVEL_MAX + 1e-6; v += LEVEL_STEP) LEVELS.push(v);
 
   let W = 0, H = 0, cols = 0, rows = 0, field = new Float32Array(0);
-  let ink = '#141414', bg = '#F4F2EC';
+  let ink = "#141414", bg = "#F4F2EC", colorsOk = false;
+  let yoff = 0;                            // parallax offset in px
   let t = Math.random() * 100, xoff = Math.random() * 1000;
   let lastDraw = 0, raf = 0, dirty = true, budget = 0;
   const ptr = { x: 0, y: 0, px: 0, py: 0, on: false };
@@ -76,14 +78,17 @@
   const height = (x, y, z) =>
     (noise(x, y, z) + OCTAVE2 * noise(x * 2 + 31.7, y * 2 + 17.3, z * 1.3)) / (1 + OCTAVE2);
 
+  /* Colours come from the stylesheet. Safari can run this script before the sheet has applied,
+     so fall back to the scheme-appropriate palette and keep retrying until the variables resolve. */
   function readColors() {
     const s = getComputedStyle(document.documentElement);
-    ink = s.getPropertyValue('--ink').trim() || ink;
-    bg = s.getPropertyValue('--bg').trim() || bg;
+    const i = s.getPropertyValue('--ink').trim(), b = s.getPropertyValue('--bg').trim();
+    if (i && b) { ink = i; bg = b; colorsOk = true; }
+    else { const dark = darkScheme.matches; ink = dark ? '#ECEAE4' : '#141414'; bg = dark ? '#121212' : '#F4F2EC'; colorsOk = false; }
   }
   function resize() {
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    W = window.innerWidth; H = window.innerHeight;
+    W = canvas.clientWidth || window.innerWidth; H = canvas.clientHeight || window.innerHeight;
     canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     cols = Math.ceil(W / CELL) + 2; rows = Math.ceil(H / CELL) + 2;
@@ -92,7 +97,7 @@
   }
   function computeField() {
     for (let r = 0; r < rows; r++) {
-      const ny = r * CELL * FREQ_Y;
+      const ny = (r * CELL + yoff) * FREQ_Y;
       for (let c = 0; c < cols; c++) field[r * cols + c] = height((c * CELL + xoff) * FREQ_X, ny, t);
     }
   }
@@ -159,7 +164,7 @@
       let ok = true;
       for (const k of crosses) if (Math.abs(k.x - x) < MIN_DIST && Math.abs(k.y - y) < MIN_DIST) { ok = false; break; }
       if (!ok) continue;
-      crosses.push({ x, y, s: 0, t0: now, life: LIFE_MIN + Math.random() * (LIFE_MAX - LIFE_MIN) });
+      crosses.push({ x, wy: y + yoff, y, s: 0, t0: now, life: LIFE_MIN + Math.random() * (LIFE_MAX - LIFE_MIN) });
       budget -= 1;
     }
   }
@@ -174,7 +179,7 @@
       if (age < IN_MS) s = backOut(age / IN_MS);
       else if (age < IN_MS + k.life) s = 1;
       else { const o = (age - IN_MS - k.life) / OUT_MS; if (o >= 1) { crosses.splice(i, 1); continue; } s = 1 - o * o; }
-      k.s = s;
+      k.s = s; k.y = k.wy - yoff;
       const half = (ARM + PAD) * s;
       ctx.fillRect(k.x - half, k.y - half, half * 2, half * 2);
     }
@@ -195,6 +200,8 @@
     if (dirty || el >= FRAME_MS) {
       if (animate && lastDraw) { t += el * DRIFT_T; xoff += el * DRIFT_X; }
       lastDraw = now;
+      if (!colorsOk) readColors();
+      yoff = animate ? (window.scrollY || 0) * PARALLAX : 0;
       computeField();
       ctx.clearRect(0, 0, W, H);
       const near = ptr.on ? [] : null, far = [];
@@ -215,7 +222,9 @@
   window.addEventListener('resize', () => { resize(); kick(); }, { passive: true });
   darkScheme.addEventListener('change', () => { readColors(); dirty = true; kick(); });
   reduceMotion.addEventListener('change', () => { dirty = true; kick(); });
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) { lastDraw = 0; kick(); } });
+  window.addEventListener("load", () => { readColors(); dirty = true; kick(); });
+  window.addEventListener("scroll", () => { dirty = true; kick(); }, { passive: true });
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) { lastDraw = 0; kick(); } });
 
   readColors(); resize(); kick();
 })();
